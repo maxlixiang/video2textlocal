@@ -1,0 +1,46 @@
+# Explicit isolated test stack: no Telegram, DeepSeek, GPU, or old database.
+name: v2t-adapter-test
+services:
+  coordinator:
+    image: telegram-video2text-manager:local
+    command: [python, -m, v2t.adapter_coordinator]
+    init: true
+    environment:
+      WINDOWS_ADAPTER_ENABLED: "1"
+      ADAPTER_TEST_MODE: "1"
+      DB_ROOT: /database
+      ADAPTER_INTERNAL_KEY_FILE: /credentials/internal.key
+      ADAPTER_LEASE_SECONDS: ${TEST_LEASE_SECONDS:-6}
+      ADAPTER_QUEUE_SECONDS: ${TEST_QUEUE_SECONDS:-30}
+      ADAPTER_EXECUTION_SECONDS: ${TEST_EXECUTION_SECONDS:-120}
+      ADAPTER_VALIDATION_SECONDS: ${TEST_VALIDATION_SECONDS:-30}
+    volumes:
+      - test-database:/database
+      - ${ADAPTER_CREDENTIALS_DIR:?test_credentials_required}:/credentials:ro
+  download:
+    image: telegram-video2text-download:local
+    init: true
+    environment:
+      WINDOWS_ADAPTER_ENABLED: "1"
+      ADAPTER_TEST_MODE: "1"
+      MEDIA_ROOT: /media
+      DATA_ROOT: /results
+      ADAPTER_CONTROL_URL: http://coordinator:8082
+      ADAPTER_INTERNAL_KEY_FILE: /credentials/internal.key
+      ADAPTER_SERVER_CERT: /credentials/server.pem
+      ADAPTER_SERVER_KEY: /credentials/server.key
+      ADAPTER_CA_FILE: /credentials/ca.pem
+      ADAPTER_WORKERS_FILE: /credentials/workers.json
+      ADAPTER_TEST_DECODE_DELAY: ${TEST_DECODE_DELAY:-8}
+      ADAPTER_LINUX_QUOTA_BYTES: ${TEST_LINUX_QUOTA:-8589934592}
+      ADAPTER_MIN_FREE_BYTES: ${TEST_MIN_FREE:-2147483648}
+    volumes:
+      - test-media:/media
+      - test-results:/results
+      - ${ADAPTER_CREDENTIALS_DIR:?test_credentials_required}:/credentials:ro
+    ports:
+      - "127.0.0.1:${ADAPTER_PORT:-18765}:8443"
+volumes:
+  test-database:
+  test-media:
+  test-results:

@@ -1,0 +1,14 @@
+.git
+.env*
+.tools
+__pycache__
+**/__pycache__
+verification
+local-data
+reference-audit
+wheelhouse
+*.log
+
+diagnostics
+.adapter*
+adapter-private

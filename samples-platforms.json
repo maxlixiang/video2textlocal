@@ -1,0 +1,4 @@
+[
+  {"label": "用户YouTubeShorts", "input": "https://www.youtube.com/shorts/G14CnqM70Cw", "expected_id": "G14CnqM70Cw", "expect": "success"},
+  {"label": "用户X视频", "input": "https://x.com/Fxtyoo/status/2109283998501625898?s=20", "expected_id": "2109283998501625898", "expect": "success"}
+]

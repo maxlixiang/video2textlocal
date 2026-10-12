@@ -1,0 +1,131 @@
+name: telegram-video2text
+
+x-limits: &limits
+  MAX_MEDIA_BYTES: ${MAX_MEDIA_BYTES:-524288000}
+  MAX_MEDIA_SECONDS: ${MAX_MEDIA_SECONDS:-7200}
+  DOWNLOAD_TIMEOUT: ${DOWNLOAD_TIMEOUT:-600}
+  DOUYIN_BROWSER_TIMEOUT_SECONDS: ${DOUYIN_BROWSER_TIMEOUT_SECONDS:-60}
+  ASR_TIMEOUT: ${ASR_TIMEOUT:-7200}
+  DATA_ROOT: /results
+  MEDIA_ROOT: /media
+  MODEL_ROOT: /models
+  HOTWORDS: ${HOTWORDS:-涉外律师 涉外法律 出海 合规 尽职调查}
+  WHISPER_REVISION: ${WHISPER_REVISION:-0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf}
+
+services:
+  manager:
+    build:
+      context: .
+      target: manager
+    image: telegram-video2text-manager:local
+    profiles: [bot]
+    init: true
+    restart: unless-stopped
+    env_file: ${BOT_ENV_FILE:-.env.test}
+    environment:
+      <<: *limits
+      DB_ROOT: /database
+      DOWNLOAD_URL: http://download:8080
+      GPU_URL: http://gpu:8080
+    volumes:
+      - results:/results
+      - media:/media:ro
+      - models:/models:ro
+      - ./config:/app/config:ro
+      - database:/database
+    networks: [backend, outbound]
+    depends_on:
+      download:
+        condition: service_healthy
+      gpu:
+        condition: service_healthy
+
+  download:
+    build:
+      context: .
+      target: download
+    image: telegram-video2text-download:local
+    init: true
+    restart: unless-stopped
+    shm_size: 256mb
+    environment:
+      <<: *limits
+      SERVICE_ROLE: download
+      DOWNLOAD_CONCURRENCY: 2
+    volumes:
+      - results:/results
+      - media:/media
+    networks: [backend, outbound]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    image: telegram-video2text-gpu:local
+    init: true
+    restart: unless-stopped
+    environment:
+      <<: *limits
+      SERVICE_ROLE: gpu
+      LD_LIBRARY_PATH: /opt/conda/lib/python3.11/site-packages/nvidia/cublas/lib:/opt/conda/lib/python3.11/site-packages/nvidia/cudnn/lib:/opt/conda/lib:/usr/local/cuda/lib64:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - results:/results
+      - media:/media:ro
+      - models:/models:ro
+      - ./config:/app/config:ro
+    networks: [backend]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  models:
+    image: telegram-video2text-gpu:local
+    profiles: [tools]
+    init: true
+    environment: *limits
+    command: [python, -m, v2t.models]
+    volumes:
+      - models:/models
+    networks: [outbound]
+
+  verify:
+    image: telegram-video2text-download:local
+    profiles: [tools]
+    init: true
+    environment:
+      <<: *limits
+      DOWNLOAD_URL: http://download:8080
+      GPU_URL: http://gpu:8080
+    command: [python, -m, v2t.verify, --douyin]
+    volumes:
+      - results:/results
+      - media:/media
+      - ./samples.json:/app/samples.json:ro
+      - ./samples-platforms.json:/app/samples-platforms.json:ro
+      - ./verification:/verification
+    networks: [backend, outbound]
+
+volumes:
+  results:
+  media:
+  models:
+  database:
+
+networks:
+  backend:
+    internal: true
+  outbound:

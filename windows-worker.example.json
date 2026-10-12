@@ -1,0 +1,18 @@
+{
+  "endpoint": "https://127.0.0.1:18765",
+  "ca": "C:\\Video2TextAdapterPrivate\\ca.pem",
+  "cert": "C:\\Video2TextAdapterPrivate\\worker.pem",
+  "key": "C:\\Video2TextAdapterPrivate\\worker.key",
+  "spool": "C:\\Video2TextAdapterData\\spool",
+  "ffmpeg": "C:\\Tools\\ffmpeg\\bin\\ffmpeg.exe",
+  "ffprobe": "C:\\Tools\\ffmpeg\\bin\\ffprobe.exe",
+  "quota_bytes": 4294967296,
+  "min_free_bytes": 2147483648,
+  "max_bytes": 524288000,
+  "max_seconds": 7200,
+  "memory_budget_bytes": 2147483648,
+  "heartbeat_seconds": 15,
+  "lease_seconds": 45,
+  "certificate_claim_margin_seconds": 900,
+  "allow_fake_ip_dns": false
+}

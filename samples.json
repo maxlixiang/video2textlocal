@@ -1,0 +1,10 @@
+[
+  {"label": "用户短链EP07", "input": "https://v.douyin.com/EBinjYrPGaM/", "expected_id": "7695089785269996809", "expect": "success"},
+  {"label": "用户分享文本EP07", "input": "2.58 H@I.iC 06/17 UYZ:/ :1pm 自制AI短剧《林满不满》EP07｜ 见面 https://v.douyin.com/EBinjYrPGaM/ 复制此链接，打开Dou音搜索，直接观看视频！", "expected_id": "7695089785269996809", "expect": "success"},
+  {"label": "用户作品长链EP07", "input": "https://www.douyin.com/video/7695089785269996809", "expected_id": "7695089785269996809", "expect": "success"},
+  {"label": "原项目示例长链A", "input": "https://www.douyin.com/video/7692261748124177640", "expected_id": "7692261748124177640", "expect": "success"},
+  {"label": "原项目媒体文件名长链B", "input": "https://www.douyin.com/video/7692332665168465178", "expected_id": "7692332665168465178", "expect": "success"},
+  {"label": "分享文本A", "input": "复制打开抖音，观看作品 https://www.douyin.com/video/7692261748124177640", "expected_id": "7692261748124177640", "expect": "success"},
+  {"label": "无效短链", "input": "https://v.douyin.com/INVALID000000000/", "expect": "failure"},
+  {"label": "不存在作品", "input": "https://www.douyin.com/video/9999999999999999999", "expect": "failure"}
+]

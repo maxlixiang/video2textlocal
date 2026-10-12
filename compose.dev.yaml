@@ -1,0 +1,14 @@
+# Read-only source overlay for rapid verification; final deployment uses compose.yaml only.
+services:
+  download:
+    volumes:
+      - ./v2t:/app/v2t:ro
+  gpu:
+    volumes:
+      - ./v2t:/app/v2t:ro
+  models:
+    volumes:
+      - ./v2t:/app/v2t:ro
+  verify:
+    volumes:
+      - ./v2t:/app/v2t:ro

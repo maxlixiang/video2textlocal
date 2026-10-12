@@ -1,0 +1,10 @@
+# This host currently resolves public media domains to fake-IP 198.18.0.0/15.
+# Permit only vetted domain suffixes in that synthetic range, never RFC1918/loopback/link-local.
+# Does not change host DNS/proxy settings or disable TLS verification.
+services:
+  download:
+    environment:
+      ALLOW_FAKE_IP_DNS: "1"
+  verify:
+    environment:
+      ALLOW_FAKE_IP_DNS: "1"
