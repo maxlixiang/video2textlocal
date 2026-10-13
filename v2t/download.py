@@ -92,6 +92,7 @@ def cached_media(directory: Path, target=None, want_video=False):
     if "has_video" not in meta:
         meta.update(probe_info(media))
         atomic_json(directory / "media.json", meta)
+    if target and target.platform=="x" and meta.get("video_index",1)!=target.video_index:return None
     if want_video and not meta["has_video"]:
         return None
     # Check full-media limits and decode again when audio is absent/corrupt.
@@ -137,6 +138,8 @@ def stream_file(url, dest: Path, headers=None, opener=None):
                 size += len(block)
                 if size > MAX_BYTES:
                     raise Failure("too_large")
+                from .storage import protect
+                protect(Path(os.getenv("MEDIA_ROOT","/media")),len(block),"media")
                 f.write(block)
     if size < 2048:
         raise Failure("no_media")
@@ -161,6 +164,8 @@ def youtube(target, directory, want_video=False):
         return None
 
     def progress(info):
+        from .storage import protect
+        protect(Path(os.getenv("MEDIA_ROOT", "/media")), 0, "media")
         if info.get("downloaded_bytes", 0) > MAX_BYTES:
             raise Failure("too_large")
 
@@ -196,10 +201,31 @@ def build_fxtwitter_mp4_url(tweet_id):
     return f"https://fxtwitter.com/i/status/{tweet_id}.mp4"
 
 
+def indexed_twitter_video(item, index):
+    # X /video/N uses the position in the mixed photo/video attachment list.
+    media = item.get("media", {})
+    attachments = media.get("all")
+    if not isinstance(attachments, list):
+        # Without mixed-order evidence we cannot safely infer an index around photos.
+        if media.get("photos"): raise Failure("no_media")
+        attachments = media.get("videos", [])
+    if not 1 <= index <= len(attachments): raise Failure("no_media")
+    chosen = attachments[index - 1]
+    if chosen.get("type", "video") != "video" or not chosen.get("url"): raise Failure("no_video")
+    return chosen["url"]
+
+
 def twitter(target, directory):
     path = directory / ("x-" + uuid.uuid4().hex + ".part")
     try:
-        stream_file(build_fxtwitter_mp4_url(target.media_id), path, {"User-Agent": UA})
+        selected_url = build_fxtwitter_mp4_url(target.media_id)
+        if target.video_index > 1:
+            with open_public(f"https://api.fxtwitter.com/status/{target.media_id}", timeout=15) as response:
+                info=json.loads(response.read(1024*1024))
+            item=info.get("tweet") or info.get("status") or {}
+            if str(item.get("id")) != target.media_id: raise Failure("target_mismatch")
+            selected_url=indexed_twitter_video(item, target.video_index)
+        stream_file(selected_url, path, {"User-Agent": UA})
         with path.open("rb") as f:
             header = f.read(16)
         if len(header) < 8 or header[4:8] != b"ftyp":
@@ -265,6 +291,8 @@ def download_task(directory: Path, url: str, want_video=False):
     cached = cached_media(directory, target, want_video)
     if cached:
         return cached
+    from .storage import protect
+    protect(Path(os.getenv("MEDIA_ROOT","/media")),MAX_BYTES+MAX_SECONDS*32000,"media")
     if target.platform == "youtube":
         staged, media_id, title = youtube(target, directory, want_video)
     else:
@@ -281,6 +309,6 @@ def download_task(directory: Path, url: str, want_video=False):
     staged.replace(media)
     if properties["has_audio"]: wav.replace(audio)
     meta = {"sha256": file_hash(media), "audio_sha256": file_hash(audio) if properties["has_audio"] else None, "bytes": media.stat().st_size,
-            "duration": duration, "media_id": media_id, "platform": target.platform, "title": title, **properties, "validation": "ffprobe+full_ffmpeg_decode"}
+            "duration": duration, "media_id": media_id, "platform": target.platform, "video_index":target.video_index, "title": title, **properties, "validation": "ffprobe+full_ffmpeg_decode"}
     atomic_json(directory / "media.json", meta)
     return meta

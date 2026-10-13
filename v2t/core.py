@@ -13,13 +13,18 @@ from urllib.parse import parse_qs, urlsplit
 
 
 ERRORS = {
+    "adapter_network": "Windows 适配器暂时无法连接，正在有界退避等待恢复。",
+    "adapter_certificate": "适配器证书失效、临期或信任验证失败，请更新专用证书。",
+    "asr_config_mismatch": "manager/GPU 识别参数不一致或模型配置不匹配，请检查配置。",
+    "send_auth": "Telegram 认证失效，请检查测试机器人配置。",
+    "send_invalid_request": "Telegram 无法处理此回复请求，已隔离该更新。",
     "network_error": "网络连接或传输失败。",
     "no_video": "下载内容没有视频画面。",
     "send_too_large": "媒体超过 Telegram 云端上传上限。",
     "send_forbidden": "机器人没有向该聊天发送的权限。",
     "send_rate_limited": "Telegram 暂时限制发送频率。",
-    "adapter_disabled": "Windows 抖音适配器未启用。",
-    "adapter_unavailable": "Windows 下载工作进程尚未连接。",
+    "adapter_disabled": "Windows 抖音下载适配器未启用。",
+    "adapter_unavailable": "Windows 抖音下载适配器已启用但当前离线；可在连接恢复后重试。",
     "adapter_auth": "适配器认证失败或证书不可用。",
     "adapter_queue_expired": "Windows 下载排队期限已过。",
     "adapter_lease_expired": "下载租约或执行期限已过。",
@@ -80,6 +85,9 @@ def file_hash(path: Path) -> str:
 def atomic_json(path: Path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
+    if Path(os.getenv("DATA_ROOT", "/results")).resolve() in path.resolve().parents:
+        from .storage import results_write
+        results_write(path, len(json.dumps(value, ensure_ascii=False).encode("utf-8")))
     with tmp.open("w", encoding="utf-8") as f:
         json.dump(value, f, ensure_ascii=False, indent=2)
         f.flush()
@@ -109,6 +117,7 @@ class Target:
     platform: str
     url: str
     media_id: str
+    video_index: int = 1
 
 
 def parse_target(text: str) -> Target:
@@ -128,7 +137,11 @@ def parse_target(text: str) -> Target:
         if host in {"x.com", "www.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"}:
             m = re.search(r"/([A-Za-z0-9_]+)/status/(\d{5,25})", p.path)
             if m:
-                return Target("x", f"https://x.com/{m[1]}/status/{m[2]}", m[2])
+                index = re.search(r"/video/(\d+)(?:/|$)",p.path)
+                number = int(index[1]) if index else 1
+                if not 1 <= number <= 20: raise Failure("invalid_input")
+                suffix = f"/video/{number}" if index else ""
+                return Target("x", f"https://x.com/{m[1]}/status/{m[2]}{suffix}", m[2],number)
         if host in {"douyin.com", "www.douyin.com", "iesdouyin.com", "www.iesdouyin.com"}:
             m = re.search(r"/(?:share/)?video/(\d{6,25})", p.path)
             vid = m[1] if m else parse_qs(p.query).get("modal_id", [""])[0]
@@ -153,7 +166,7 @@ def word_file(path):
 
 def model_config(config):
     # Hotwords are runtime decoding hints, not a model artifact version.
-    return {k:v for k,v in config.items() if k != "hotwords"}
+    return {k:v for k,v in config.items() if k not in {"hotwords","batch_size_s","beam_size","vad_filter"}}
 
 
 def asr_config(engine: str) -> dict:
@@ -163,7 +176,7 @@ def asr_config(engine: str) -> dict:
         return {"engine": engine, "model": os.getenv("WHISPER_MODEL", "mobiuslabsgmbh/faster-whisper-large-v3-turbo"),
                 "revision": os.getenv("WHISPER_REVISION", "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf"),
                 "device": "cuda", "compute_type": "float16", "language": None,
-                "beam_size": 5, "vad_filter": True, "implementation": "v1", "faster_whisper": "1.2.1", "ctranslate2": "4.6.0"}
+                "beam_size": int(os.getenv("WHISPER_BEAM_SIZE","5")), "vad_filter": os.getenv("WHISPER_VAD_FILTER","1")=="1", "implementation": "v1", "faster_whisper": "1.2.1", "ctranslate2": "4.6.0"}
     default_file = Path(__file__).resolve().parent.parent / "config" / "hotwords.txt"
     selected_file = os.getenv("HOTWORDS_FILE")
     words = word_file(selected_file) if selected_file else word_file(default_file) if default_file.exists() else []
@@ -171,7 +184,7 @@ def asr_config(engine: str) -> dict:
     return {"engine": engine, "model": "iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
             "revision": "v2.0.4", "vad_model": "iic/speech_fsmn_vad_zh-cn-16k-common-pytorch", "vad_revision": "v2.0.4",
             "punc_model": "iic/punc_ct-transformer_cn-en-common-vocab471067-large", "punc_revision": "v2.0.4",
-            "device": "cuda", "compute_type": "float32", "language": "zh", "batch_size_s": 60,
+            "device": "cuda", "compute_type": "float32", "language": "zh", "batch_size_s": int(os.getenv("FUNASR_BATCH_SIZE_S","60")),
             "hotwords": list(dict.fromkeys(words)), "implementation": "v1", "funasr": "1.2.7", "torch": "2.5.1+cu121"}
 
 
@@ -206,6 +219,8 @@ def write_transcript(path: Path, segments, metadata: dict, title="原稿", times
             lines.append(f"[{timestamp(s['start'])} - {timestamp(s['end'])}]")
         lines.extend([s["text"].strip(), ""])
     tmp = path.with_suffix(".tmp")
+    from .storage import results_write
+    results_write(path, len("\n".join(lines).encode("utf-8")))
     tmp.write_text("\n".join(lines), encoding="utf-8")
     tmp.replace(path)
 
@@ -214,6 +229,7 @@ class Store:
     """Only the manager process writes SQLite. All calls are on its event-loop thread."""
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = path
         self.db = sqlite3.connect(path)
         self.db.row_factory = sqlite3.Row
         self.db.executescript("""
@@ -225,6 +241,7 @@ class Store:
                 status TEXT DEFAULT 'choice', stage TEXT DEFAULT 'choice', error TEXT,
                 raw_sent INTEGER DEFAULT 0, polished_sent INTEGER DEFAULT 0,
                 status_message INTEGER, created REAL, updated REAL);
+            CREATE TABLE IF NOT EXISTS inbox(update_id INTEGER PRIMARY KEY,payload TEXT,state TEXT,attempts INTEGER DEFAULT 0,error TEXT,updated REAL);
             CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT);
             CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, task_id TEXT, stage TEXT, status TEXT, error TEXT, created REAL);
             CREATE TABLE IF NOT EXISTS deliveries(task_id TEXT, kind TEXT, content_hash TEXT, message_id INTEGER,
@@ -245,6 +262,8 @@ class Store:
         return dict(row) if row else None
 
     def create(self, dedupe, owner, chat, target: Target):
+        from .storage import protect
+        protect(self.path.parent,kind="database")
         tid = uuid.uuid4().hex
         now = time.time()
         with self.db:
@@ -275,6 +294,8 @@ class Store:
             self.db.execute("INSERT OR IGNORE INTO deliveries VALUES(?,?,?,?)", (tid, kind, content_hash, message_id))
 
     def enqueue(self, tid, owner, polish, limit=20, mode=None):
+        from .storage import protect
+        protect(self.path.parent,kind="database")
         with self.db:
             row = self.get(tid)
             if not row or row["owner"] != owner or row["status"] not in {"choice", "failed"}:
@@ -298,6 +319,20 @@ class Store:
     def recover(self):
         with self.db:
             self.db.execute("UPDATE tasks SET status='queued' WHERE status='running'")
+
+    def inbox_put(self, update_id, payload):
+        from .storage import protect
+        protect(self.path.parent,kind="database")
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO inbox(update_id,payload,state,updated) VALUES(?,?,?,?)",(update_id,json.dumps(payload),'pending',time.time()))
+        return dict(self.db.execute("SELECT * FROM inbox WHERE update_id=?",(update_id,)).fetchone())
+
+    def inbox_finish(self, update_id, error=None):
+        # Durable task effects already committed; terminal receipt and offset are one transaction.
+        with self.db:
+            self.db.execute("UPDATE inbox SET state=?,error=?,updated=? WHERE update_id=?",('failed' if error else 'done',error,time.time(),update_id))
+            current=self.get_offset()
+            self.db.execute("INSERT OR REPLACE INTO kv VALUES('offset',?)",(str(max(current,update_id+1)),))
 
     def get_offset(self):
         r = self.db.execute("SELECT value FROM kv WHERE key='offset'").fetchone()

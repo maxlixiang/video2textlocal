@@ -8,6 +8,8 @@ def request_error(exc):
     # Do not propagate Telegram descriptions or request URLs containing the token.
     if isinstance(exc,urllib.error.HTTPError):
         if exc.code==403:return 'send_forbidden'
+        if exc.code==401:return 'send_auth'
+        if exc.code==400:return 'send_invalid_request'
         if exc.code==429:return 'send_rate_limited'
         if exc.code==413:return 'send_too_large'
     return 'send_failed'

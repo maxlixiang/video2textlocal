@@ -64,7 +64,7 @@ def infer(directory, engine):
         raise Failure("invalid_artifact")
     root, lock = model_lock(engine)
     if model_config(lock["config"]) != model_config(config):
-        raise Failure("invalid_artifact")
+        raise Failure("asr_config_mismatch")
     started = time.monotonic()
     if engine == "whisper":
         import ctranslate2
@@ -73,7 +73,7 @@ def infer(directory, engine):
             raise Failure("gpu_unavailable")
         model = WhisperModel(str(root / lock["models"]["asr"]["path"]), device="cuda", compute_type=config["compute_type"],
                              local_files_only=True)
-        iterator, info = model.transcribe(str(audio), language=None, beam_size=config["beam_size"], vad_filter=True)
+        iterator, info = model.transcribe(str(audio), language=None, beam_size=config["beam_size"], vad_filter=config["vad_filter"])
         segments = [{"start": s.start, "end": s.end, "text": s.text.strip()} for s in iterator if s.text.strip()]
         actual = {"engine": engine, "device": model.model.device, "compute_type": model.model.compute_type,
                   "language": info.language, "language_probability": info.language_probability,

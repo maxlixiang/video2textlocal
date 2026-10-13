@@ -1,0 +1,12 @@
+# Acceptance and daily test-bot stack: immutable image code; config is read-only.
+services:
+  manager:
+    image: telegram-video2text-manager:fixes-final
+  download:
+    image: telegram-video2text-download:fixes-final
+  gpu:
+    image: telegram-video2text-gpu:fixes-final
+volumes:
+  models:
+    external: true
+    name: telegram-video2text_models

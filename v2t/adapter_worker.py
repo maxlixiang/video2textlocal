@@ -18,7 +18,7 @@ class Worker:
      r=self.client.call('/v1/heartbeat',p);last_ok[0]=time.monotonic();ownership['server']=r['state'] in ('validating','complete');beats.append({'time':time.time(),'state':r['state']})
      if r['state']=='complete':return
     except Failure as e:
-     if e.code=='adapter_lease_expired':failure.append(e.code);return
+     if e.code in ('adapter_lease_expired','adapter_auth','adapter_certificate'):failure.append(e.code);return
      # Transport failure is retriable only while lease's known window has not expired.
      beats.append({'time':time.time(),'error':e.code})
      if not ownership['server'] and time.monotonic()-last_ok[0]>self.config.get('lease_seconds',45):failure.append('adapter_lease_expired');return
@@ -40,7 +40,7 @@ class Worker:
     if gate.exists():gate.unlink()
     childenv={k:v for k,v in os.environ.items() if k.upper() in ('SYSTEMROOT','WINDIR','COMSPEC','PATH','PATHEXT','USERPROFILE','APPDATA','LOCALAPPDATA','PROGRAMFILES','PROGRAMFILES(X86)','HOMEDRIVE','HOMEPATH')}
     temp=jobdir/'browser-temp';temp.mkdir(exist_ok=True);childenv.update(TEMP=str(temp),TMP=str(temp),PYTHONDONTWRITEBYTECODE='1')
-    childconfig={k:v for k,v in self.config.items() if k not in ('cert','key','ca','endpoint')}
+    childconfig={k:v for k,v in self.config.items() if k not in ('cert','key','ca','endpoint','credential_manifest')}
     atomic_json(jobdir/'child-config.json',childconfig)
     child=subprocess.Popen([sys.executable,str(Path(__file__).resolve().parent.parent/'windows_download.py'),'--directory',str(jobdir),'--config',str(jobdir/'child-config.json')],env=childenv,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     budget=Budget(child,self.config.get('memory_budget_bytes',2*1024**3));gate.touch()
@@ -75,7 +75,7 @@ class Worker:
       for retry in range(3):
        try:value=self.client.call('/v1/chunk',body=block,headers=headers);break
        except Failure as e:
-        if e.code not in ('adapter_auth','service_unavailable'):raise
+        if e.code not in ('adapter_network','service_unavailable'):raise
         if retry==2:raise
         time.sleep(retry+1)
       offset=value['offset'];journal.update(state='uploading',offset=offset,generation=job['generation']);atomic_json(jobdir/'journal.json',journal)
@@ -87,23 +87,36 @@ class Worker:
     if failure:raise Failure(failure[0])
     time.sleep(.5)
   except Failure as e:
-   journal.update(error=e.code,state='suspended' if e.code in ('adapter_auth','service_unavailable') else 'failed',heartbeats=beats);atomic_json(jobdir/'journal.json',journal)
-   if e.code not in ('adapter_auth','service_unavailable'):
+   journal.update(error=e.code,state='suspended' if e.code in ('adapter_network','service_unavailable') else 'failed',heartbeats=beats);atomic_json(jobdir/'journal.json',journal)
+   if e.code not in ('adapter_network','service_unavailable'):
     try:self.client.call('/v1/failure',{**p,'code':e.code})
     except Failure:pass
    raise
   finally:stop.set();thread.join(timeout=16)
  def run(self,max_jobs=0):
-  done=0
+  done=0;backoff=1;warned_certificate=None
   while not max_jobs or done<max_jobs:
-   if cert_remaining(self.config['cert'])<self.config.get('certificate_claim_margin_seconds',900):raise Failure('adapter_auth')
-   try:job=self.client.call('/v1/claim',{})
-   except Failure:print('adapter_auth_or_transport_unavailable',flush=True);return 1
+   certificate=self.client.credentials()['cert'];remaining=cert_remaining(certificate)
+   if remaining<86400 and warned_certificate!=certificate:
+    print('adapter_certificate_expires_within_24_hours',flush=True);warned_certificate=certificate
+   if remaining<self.config.get('certificate_claim_margin_seconds',900):
+    print('adapter_certificate_renewal_required',flush=True);return 1
+   try:job=self.client.call('/v1/claim',{});backoff=1
+   except Failure as e:
+    if e.code not in ('adapter_network','service_unavailable'):
+     print(e.code,flush=True);return 1
+    print('adapter_reconnecting:'+str(backoff),flush=True)
+    time.sleep(backoff);backoff=min(backoff*2,self.config.get('reconnect_max_seconds',30));continue
    if job.get('idle'):time.sleep(1);continue
    try:
-    result=self.execute(job);print(json.dumps({'task_id':job['task_id'],'state':result['state']},ensure_ascii=False),flush=True)
-   except Failure as e:print(json.dumps({'task_id':job['task_id'],'error':e.code}),flush=True);done+=1;continue
-   done+=1
+    result=self.execute(job);print(json.dumps({'task_id':job['task_id'],'state':result['state']},ensure_ascii=False),flush=True);done+=1
+   except Failure as e:
+    print(json.dumps({'task_id':job['task_id'],'error':e.code}),flush=True)
+    if e.code in ('adapter_network','service_unavailable'):
+     # Keep journal and ask broker for the same still-valid lease after reconnecting.
+     time.sleep(backoff);backoff=min(backoff*2,30);continue
+    if e.code in ('adapter_auth','adapter_certificate'):return 1
+    done+=1
   return 0
 
 def main():

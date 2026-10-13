@@ -19,6 +19,13 @@ def visible_verification(page):
  try:return bool(page.evaluate("() => /验证码|完成验证|安全验证|拖动滑块/.test((document.body?.textContent||'').slice(0,8000))"))
  except Exception:return False
 
+def close_browser_resources(context,browser):
+ errors=[]
+ for resource in (context,browser):
+  try:resource.close()
+  except Exception as exc:errors.append(type(exc).__name__)
+ return errors
+
 def download(job,directory,config):
  from .douyin_parser import DEFAULT_USER_AGENT,_PAGE_DATA
  from playwright.sync_api import sync_playwright
@@ -26,12 +33,10 @@ def download(job,directory,config):
  expected=job.get('input_id');matched=None;beg=time.monotonic()
  with sync_playwright() as pw:
   browser=pw.chromium.launch(channel='chromium',headless=True,timeout=15000)
-  context=browser.new_context(user_agent=DEFAULT_USER_AGENT,locale='zh-CN',timezone_id='Asia/Shanghai',viewport={'width':1440,'height':900})
+  context=browser.new_context(user_agent=DEFAULT_USER_AGENT,locale='zh-CN',timezone_id='Asia/Shanghai',viewport={'width':1440,'height':900},service_workers='block')
   page=context.new_page();candidates=[]
-  def route(r):
-   if r.request.resource_type in ('image','media','font'):r.abort()
-   else:r.continue_()
-  context.route('**/*',route)
+  from .browser_policy import install_browser_policy
+  install_browser_policy(context,config.get('allow_fake_ip_dns',False))
   def finished(q):
    try:
     r=q.response()
@@ -82,7 +87,9 @@ def download(job,directory,config):
    path=directory/'media.part';path.write_bytes(body)
    metadata={'title':str(matched.get('desc') or '')[:500],'matched_id':matched_id,'resolved_id':extract_aweme_id(page.url),'windows':{'browser':browser.version,'playwright':importlib.metadata.version('playwright'),'cookie_count':len(context.cookies()),'elapsed_s':time.monotonic()-beg,'fixture':False,'declared_bytes':declared}}
    return path,metadata
-  finally:context.close();browser.close()
+  finally:
+   cleanup=close_browser_resources(context,browser)
+   if 'metadata' in locals():metadata['windows']['cleanup_errors']=cleanup
 
 def validate(path,config,want_video=False):
  try:

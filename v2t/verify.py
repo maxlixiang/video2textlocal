@@ -6,7 +6,7 @@ import uuid
 import re
 from pathlib import Path
 
-from .core import Failure, atomic_json, file_hash, media_dir, parse_target, read_json, task_dir, validate_segments, write_transcript
+from .core import asr_config, Failure, atomic_json, file_hash, media_dir, parse_target, read_json, task_dir, validate_segments, write_transcript
 from .net import json_request
 
 
@@ -27,7 +27,7 @@ def run_sample(sample, repeat, recognize=False):
             raise Failure("no_media")
         if recognize:
             engine = "funasr" if target.platform == "douyin" else "whisper"
-            inferred = json_request(os.getenv("GPU_URL", "http://gpu:8080") + "/run", {"task_id": tid, "engine": engine},
+            inferred = json_request(os.getenv("GPU_URL", "http://gpu:8080") + "/run", {"task_id": tid, "engine": engine, "config":asr_config(engine)},
                                     timeout=int(os.getenv("ASR_TIMEOUT", "7200")) + 60)
             validate_segments(inferred["segments"])
             if inferred["actual"]["device"] != "cuda":
@@ -63,7 +63,7 @@ def gpu():
     output = []
     for engine in ("funasr", "whisper", "funasr"):
         try:
-            result = json_request(os.getenv("GPU_URL", "http://gpu:8080") + "/run", {"task_id": tid, "engine": engine},
+            result = json_request(os.getenv("GPU_URL", "http://gpu:8080") + "/run", {"task_id": tid, "engine": engine, "config":asr_config(engine)},
                                   timeout=int(os.getenv("ASR_TIMEOUT", "7200")) + 60)
             validate_segments(result["segments"])
             if result["actual"]["device"] != "cuda":
@@ -82,7 +82,7 @@ def existing(task_id, engine=None):
     media = read_json(media_dir(directory) / "media.json", {})
     selected = engine or ("funasr" if media.get("platform") == "douyin" else "whisper")
     try:
-        result = json_request(os.getenv("GPU_URL", "http://gpu:8080") + "/run", {"task_id": task_id, "engine": selected},
+        result = json_request(os.getenv("GPU_URL", "http://gpu:8080") + "/run", {"task_id": task_id, "engine": selected, "config":asr_config(selected)},
                               timeout=int(os.getenv("ASR_TIMEOUT", "7200")) + 60)
         validate_segments(result["segments"])
         if result["actual"]["device"] != "cuda":

@@ -82,6 +82,11 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def do_GET(self):
+        if self.path == "/configuration" and ROLE == "gpu":
+            try:
+                from .core import asr_config
+                return self.reply({"configs":{e:asr_config(e) for e in ("funasr","whisper")}})
+            except Failure as e:return self.reply({"error":e.code})
         self.reply({"role": ROLE, "ready": True} if self.path == "/health" else {"error": "invalid_input"})
 
     def do_POST(self):
@@ -99,7 +104,7 @@ class Handler(BaseHTTPRequestHandler):
                 target = parse_target(payload["url"])
                 source_dir = media_dir(task_dir(ROOT, payload["task_id"]))
                 if (source_dir / "media.bin").exists() and not (source_dir / "media.json").exists():
-                    from .core import read_json, file_hash
+                    from .core import file_hash
                     receipts = [read_json(p, {}) for p in source_dir.glob("adapter/*/receipt.json")]
                     verified = any(r.get("sha256") == file_hash(source_dir / "media.bin") and r.get("resolved_id") == r.get("matched_id")
                         and (not target.media_id or target.media_id == r.get("matched_id")) for r in receipts)
@@ -119,6 +124,13 @@ class Handler(BaseHTTPRequestHandler):
             directory.mkdir(parents=True, exist_ok=True)
             from .core import parse_target
             is_douyin = ROLE == "download" and parse_target(payload["url"]).platform == "douyin"
+            if ROLE == "gpu":
+                from .core import asr_config
+                cfg=asr_config(payload["engine"])
+                if payload.get("config") != cfg:raise Failure("asr_config_mismatch")
+                from .core import model_config
+                lock=read_json(Path(os.getenv("MODEL_ROOT","/models"))/"models.lock.json",{}).get(payload["engine"],{})
+                if model_config(lock.get("config",{})) != model_config(cfg):raise Failure("asr_config_mismatch")
             with CAPACITY:
                 if is_douyin:
                     with DOUYIN:

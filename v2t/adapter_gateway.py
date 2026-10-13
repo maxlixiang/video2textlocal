@@ -91,7 +91,7 @@ class Gateway:
     reserve=p['bytes']+int(os.getenv('MAX_MEDIA_SECONDS','7200'))*32000
     budget=space(self.root,reserve,self.quota,self.minimum,reserved)
     control('start',p);d.mkdir(parents=True,exist_ok=False)
-    win={k:v for k,v in p.get('windows',{}).items() if k in ('browser','playwright','cookie_count','elapsed_s','memory','fixture','decode')}
+    win={k:v for k,v in p.get('windows',{}).items() if k in ('browser','playwright','cookie_count','elapsed_s','memory','fixture','decode','cleanup_errors')}
     r={**self.payload(p),'bytes':p['bytes'],'sha256':p['sha256'],'matched_id':p['matched_id'],'resolved_id':p['resolved_id'],'state':'uploading','offset':0,'windows':win,'title':str(p.get('title') or '')[:500],'disk_admission':budget}
     (d/'media.part').touch();atomic_json(d/'receipt.json',r);return {'offset':0,'state':'uploading'}
   if action=='upload_status':
@@ -133,8 +133,8 @@ def start_gateway():
   def get_request(self):
    sock,addr=super().get_request();sock.settimeout(15)
    try:
-    cert=Path(os.environ['ADAPTER_SERVER_CERT']);priv=Path(os.environ['ADAPTER_SERVER_KEY'])
-    if cert_remaining(cert)<=0:raise Failure('adapter_auth')
+    cert=Path(os.environ['ADAPTER_SERVER_CERT']);directory=cert.parent.resolve();cert=directory/cert.name;priv=directory/Path(os.environ['ADAPTER_SERVER_KEY']).name
+    if cert_remaining(cert)<=0:print('adapter_server_certificate_expired',flush=True)
     ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);ctx.minimum_version=ssl.TLSVersion.TLSv1_2;ctx.load_cert_chain(cert,priv);ctx.load_verify_locations(os.environ['ADAPTER_CA_FILE']);ctx.verify_mode=ssl.CERT_REQUIRED
     return ctx.wrap_socket(sock,server_side=True),addr
    except Exception:sock.close();raise OSError('adapter_auth') from None

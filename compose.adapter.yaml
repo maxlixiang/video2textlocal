@@ -13,8 +13,8 @@ services:
       WINDOWS_ADAPTER_ENABLED: ${WINDOWS_ADAPTER_ENABLED:-0}
       ADAPTER_CONTROL_URL: http://manager:8082
       ADAPTER_INTERNAL_KEY_FILE: /adapter-credentials/internal.key
-      ADAPTER_SERVER_CERT: /adapter-credentials/server.pem
-      ADAPTER_SERVER_KEY: /adapter-credentials/server.key
+      ADAPTER_SERVER_CERT: /adapter-credentials/tls-active/server.pem
+      ADAPTER_SERVER_KEY: /adapter-credentials/tls-active/server.key
       ADAPTER_CA_FILE: /adapter-credentials/ca.pem
       ADAPTER_WORKERS_FILE: /adapter-credentials/workers.json
       ADAPTER_LINUX_QUOTA_BYTES: ${ADAPTER_LINUX_QUOTA_BYTES:-8589934592}

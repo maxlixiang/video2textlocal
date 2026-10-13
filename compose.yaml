@@ -10,6 +10,16 @@ x-limits: &limits
   MEDIA_ROOT: /media
   MODEL_ROOT: /models
   HOTWORDS: ${HOTWORDS:-涉外律师 涉外法律 出海 合规 尽职调查}
+  HOTWORDS_FILE: ${HOTWORDS_FILE:-/app/config/hotwords.txt}
+  WHISPER_BEAM_SIZE: ${WHISPER_BEAM_SIZE:-5}
+  WHISPER_VAD_FILTER: ${WHISPER_VAD_FILTER:-1}
+  FUNASR_BATCH_SIZE_S: ${FUNASR_BATCH_SIZE_S:-60}
+  WHISPER_MODEL: ${WHISPER_MODEL:-mobiuslabsgmbh/faster-whisper-large-v3-turbo}
+  MEDIA_QUOTA_BYTES: ${MEDIA_QUOTA_BYTES:-8589934592}
+  MEDIA_MIN_FREE_BYTES: ${MEDIA_MIN_FREE_BYTES:-2147483648}
+  RESULT_QUOTA_BYTES: ${RESULT_QUOTA_BYTES:-2147483648}
+  RESULT_MIN_FREE_BYTES: ${RESULT_MIN_FREE_BYTES:-536870912}
+  DB_MIN_FREE_BYTES: ${DB_MIN_FREE_BYTES:-268435456}
   WHISPER_REVISION: ${WHISPER_REVISION:-0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf}
 
 services:
@@ -21,6 +31,9 @@ services:
     profiles: [bot]
     init: true
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
     env_file: ${BOT_ENV_FILE:-.env.test}
     environment:
       <<: *limits
@@ -47,6 +60,9 @@ services:
     image: telegram-video2text-download:local
     init: true
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
     shm_size: 256mb
     environment:
       <<: *limits
@@ -69,6 +85,9 @@ services:
     image: telegram-video2text-gpu:local
     init: true
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
     environment:
       <<: *limits
       SERVICE_ROLE: gpu

@@ -129,3 +129,6 @@ docker compose --env-file .env.example --profile tools run --name v2t-existing-m
 ## 仓库交付范围
 
 仓库仅包含源码、构建文件、固定依赖清单、无密钥配置示例和测试报告摘要。测试媒体、转写附件、原始运行日志、证书/私钥、模型缓存、wheelhouse 和旧项目参考副本留在本地，不随源码发布。部分历史报告引用的原始本机证据不在仓库中。克隆后请先执行上面的 fetch_wheels.py，再构建 GPU 镜像；wheelhouse 不通过 Git 分发。
+
+
+本轮集中修复及最终镜像操作见 [FIX-OPERATIONS.md](FIX-OPERATIONS.md)，逐项验证与真实交互验收见 [FIX-REPORT.md](FIX-REPORT.md)。真实语义准确性仍需使用者抽查。

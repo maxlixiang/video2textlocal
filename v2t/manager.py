@@ -110,14 +110,18 @@ class Manager:
                 # Yields to all control/heartbeat/SQLite operations while download executes elsewhere.
                 await self.adapter.wait(tid)
         else:
+            if row["platform"] == "douyin" and os.getenv("DOUYIN_LINUX_DIAGNOSTIC") != "1":
+                raise Failure("adapter_disabled")
             await asyncio.to_thread(self.service, os.getenv("DOWNLOAD_URL", "http://download:8080") + "/run",
                                     {"task_id": tid, "url": row["url"], "want_video": row["mode"] == "video"}, timeout=int(os.getenv("DOWNLOAD_TIMEOUT", "600")) + 60)
 
     async def process(self, row):
         tid = row["id"]
         directory = task_dir(self.root, tid)
-        directory.mkdir(parents=True, exist_ok=True)
         try:
+            from .storage import protect
+            protect(self.root, kind="results")
+            directory.mkdir(parents=True, exist_ok=True)
             if row["mode"] == "video":
                 await self.process_video(row)
                 return
@@ -131,7 +135,7 @@ class Manager:
                 await self.notify(tid, "recognize")
                 self.store.event(tid, "recognize", "running")
                 await asyncio.to_thread(self.service, os.getenv("GPU_URL", "http://gpu:8080") + "/run",
-                                        {"task_id": tid, "engine": row["engine"]}, timeout=int(os.getenv("ASR_TIMEOUT", "7200")) + 60)
+                                        {"task_id": tid, "engine": row["engine"], "config":asr_config(row["engine"])}, timeout=int(os.getenv("ASR_TIMEOUT", "7200")) + 60)
                 raw = await asyncio.to_thread(cached_raw, directory, row["engine"], self.model_root)
                 if raw is None:
                     raise Failure("invalid_artifact")
@@ -251,7 +255,10 @@ class Manager:
         if text.startswith("/status"):
             rows = self.store.db.execute("SELECT id,status,stage,error FROM tasks WHERE owner=? AND chat=? ORDER BY created DESC LIMIT 10", (owner, chat)).fetchall()
             reply = "\n".join(f"{r['id']} {LABELS.get(r['stage'], r['stage'])}" for r in rows) or "暂无任务"
-            await asyncio.to_thread(self.telegram.call, "sendMessage", {"chat_id": chat, "text": reply})
+            choices = self.store.db.execute("SELECT * FROM tasks WHERE owner=? AND chat=? AND status='choice' ORDER BY created DESC LIMIT 1", (owner,chat)).fetchone()
+            values={"chat_id":chat,"text":reply}
+            if choices:values["reply_markup"]=self.choices(dict(choices))
+            await asyncio.to_thread(self.telegram.call,"sendMessage",values)
             return
         try:
             target = parse_target(text)
@@ -273,17 +280,59 @@ class Manager:
             else:
                 await asyncio.sleep(0.5)
 
+    def normalize_update(self, update):
+        out={"update_id":int(update["update_id"])}
+        if update.get("callback_query"):
+            cb=update["callback_query"]
+            out["callback_query"]={"id":cb["id"],"from":{"id":cb["from"]["id"]},"data":cb.get("data","") if __import__("re").fullmatch(r"(?:video|raw|both|retry|engine):[a-f0-9]{32}",str(cb.get("data",""))) else ""}
+        elif update.get("message"):
+            m=update["message"];text=m.get("text","")
+            if text.startswith(("/start","/help","/status")):text=text.split()[0]
+            else:
+                try:text=parse_target(text).url
+                except (Failure,ValueError):text="invalid_video_address"
+            out["message"]={"message_id":m["message_id"],"from":{"id":m.get("from",{}).get("id")},"chat":{"id":m["chat"]["id"]},"text":text[:200]}
+        return out
+
+    async def ingest(self, update):
+        uid=update["update_id"]
+        try:normalized=self.normalize_update(update)
+        except (KeyError,TypeError,ValueError,AttributeError):
+            self.store.inbox_put(uid,{"update_id":uid});self.store.inbox_finish(uid,"invalid_input");return
+        receipt=self.store.inbox_put(uid,normalized)
+        if receipt["state"] in {"done","failed"}:
+            self.store.inbox_finish(uid,receipt["error"]);return
+        payload=__import__('json').loads(receipt["payload"])
+        error="update_attempts_exhausted" if receipt["attempts"]>=3 else None
+        while receipt["attempts"]<3:
+            with self.store.db:
+                self.store.db.execute("UPDATE inbox SET attempts=attempts+1 WHERE update_id=?",(uid,))
+            receipt["attempts"]+=1
+            try:
+                await self.handle(payload);error=None;break
+            except Failure as exc:
+                error=exc.code
+                if error in {"send_forbidden","send_auth","send_invalid_request","invalid_input","disk_full","adapter_quota"}:break
+                if receipt["attempts"]<3:await asyncio.sleep(2**(receipt["attempts"]-1))
+            except Exception:
+                error="internal_error";break
+        self.store.inbox_finish(uid,error)
+        if error:print("telegram_update_failed:"+error,flush=True)
+
     async def poll(self):
         while True:
             try:
-                updates = await asyncio.to_thread(self.telegram.call, "getUpdates", {"offset": self.store.get_offset(),
-                    "timeout": 25, "allowed_updates": ["message", "callback_query"]}, timeout=35)
+                # Replay pending sanitized work before obtaining/acknowledging more remote updates.
+                pending=self.store.db.execute("SELECT payload FROM inbox WHERE state='pending' ORDER BY update_id").fetchall()
+                if pending:
+                    for p in pending:await self.ingest(__import__('json').loads(p[0]))
+                from .storage import protect
+                protect(self.store.path.parent,kind="database")
+                updates=await asyncio.to_thread(self.telegram.call,"getUpdates",{"offset":self.store.get_offset(),"timeout":25,"allowed_updates":["message","callback_query"]},timeout=35)
                 for update in updates:
-                    await self.handle(update)
-                    self.store.offset(update["update_id"] + 1)
+                    await self.ingest(update)
             except Exception:
-                print("telegram_poll_retry", flush=True)
-                await asyncio.sleep(5)
+                print("telegram_poll_or_storage_backoff",flush=True);await asyncio.sleep(5)
 
 
 async def run():
@@ -307,6 +356,9 @@ async def run():
     me = await asyncio.to_thread(telegram.call, "getMe", {})
     if me["id"] != expected_id:
         raise SystemExit("Token does not belong to EXPECTED_TEST_BOT_ID; polling refused")
+    remote=await asyncio.to_thread(json_request,os.getenv("GPU_URL","http://gpu:8080")+"/configuration")
+    if remote.get("configs") != {engine:asr_config(engine) for engine in ("funasr","whisper")}:
+        raise SystemExit("asr_config_mismatch; polling refused")
     store = Store(db_root / "tasks.sqlite3")
     store.recover()
     manager = Manager(store, root, Path(os.getenv("MODEL_ROOT", "/models")), telegram, allowed)

@@ -1,0 +1,6 @@
+# Explicit application-only compatibility with this host's existing fake-IP DNS.
+# Only trusted platform/CDN suffixes may use 198.18/15; other private IPs remain blocked.
+services:
+  download:
+    environment:
+      ALLOW_FAKE_IP_DNS: ${ALLOW_FAKE_IP_DNS:-0}
