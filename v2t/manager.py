@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import fcntl
 import os
 from pathlib import Path
@@ -272,6 +273,38 @@ class Manager:
                  "text": f"任务 {row['id']} · {target.platform}\n选择输出：下载视频不识别；原稿仅本地识别；DeepSeek 只接收转写文本。", "reply_markup": self.choices(row)})
         self.store.update(row["id"], status_message=result["message_id"])
 
+    async def cleanup_media(self):
+        from .retention import eligible,seconds
+        from .adapter_common import key
+        import json,urllib.request
+        self.store.db.execute("CREATE TABLE IF NOT EXISTS media_retention(task_id TEXT PRIMARY KEY,cleaned REAL,bytes_removed INTEGER)")
+        if seconds() and not os.getenv("ADAPTER_INTERNAL_KEY_FILE"):print("media_retention_disabled_missing_auth",flush=True)
+        while True:
+            try:
+                if seconds() and os.getenv("ADAPTER_INTERNAL_KEY_FILE"):
+                    for row in eligible(self.store,limit=100):
+                        tid=row["id"]
+                        if self.store.db.execute("SELECT 1 FROM media_retention WHERE task_id=?",(tid,)).fetchone():continue
+                        total=0
+                        for _ in range(100):
+                            # Recheck terminal status before each individually authorized file operation.
+                            current=self.store.get(tid)
+                            if current["status"]!="done" or current["updated"]>__import__('time').time()-seconds():break
+                            def clean_one():
+                                request=urllib.request.Request(os.getenv("DOWNLOAD_URL","http://download:8080")+"/maintenance/media",json.dumps({"task_id":tid}).encode(),headers={"X-Adapter-Key":key()})
+                                with urllib.request.urlopen(request,timeout=10) as response:result=json.load(response)
+                                if result.get("error"):raise Failure(result["error"])
+                                return result
+                            result=await asyncio.to_thread(clean_one);total+=result["bytes"]
+                            if result.get("deferred"):break
+                            if result["complete"]:
+                                with self.store.db:self.store.db.execute("INSERT OR REPLACE INTO media_retention VALUES(?,?,?)",(tid,__import__('time').time(),total))
+                                if total:print("media_retention_completed:"+tid+":"+str(total),flush=True)
+                                break
+                            await asyncio.sleep(.05)
+            except Exception:print("media_retention_retry_later",flush=True)
+            await asyncio.sleep(max(60,int(os.getenv("MEDIA_CLEANUP_INTERVAL_SECONDS","3600"))))
+
     async def work(self):
         while True:
             row = self.store.claim()
@@ -352,6 +385,49 @@ async def run():
         fcntl.flock(singleton, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         raise SystemExit("Another manager owns this database") from None
+    from .core import atomic_json
+    marker = db_root / "readiness.json"
+    atomic_json(marker, {"ready": False, "checked_at": time.time()})
+    async def dependencies():
+        for url in (os.getenv("GPU_URL", "http://gpu:8080"), os.getenv("DOWNLOAD_URL", "http://download:8080")):
+            response = await asyncio.to_thread(json_request, url + "/health")
+            if not response.get("ready"): raise Failure("service_unavailable")
+        remote = await asyncio.to_thread(json_request, os.getenv("GPU_URL", "http://gpu:8080") + "/configuration")
+        if remote.get("configs") != {engine: asr_config(engine) for engine in ("funasr", "whisper")}:
+            raise Failure("asr_config_mismatch")
+    # Engine restart policies do not replay Compose depends_on. Wait before polling.
+    while True:
+        try:
+            await dependencies()
+            break
+        except Exception:
+            print("startup_dependencies_not_ready", flush=True)
+            await asyncio.sleep(10)
+    async def monitor():
+        warned_at = 0
+        while True:
+            try:
+                await dependencies()
+                ready = True
+                health = await asyncio.to_thread(json_request, os.getenv("DOWNLOAD_URL", "http://download:8080") + "/health")
+                if health.get("warnings") and time.time() - warned_at > 86400:
+                    print("adapter_certificate_maintenance_due", flush=True)
+                    notice = read_json(db_root / "certificate-notice.json", {})
+                    if time.time() - notice.get("sent_at", 0) > 86400:
+                        chats = {r["chat"] for r in store.db.execute("SELECT DISTINCT owner,chat FROM tasks") if r["owner"] in allowed}
+                        delivered = True
+                        for chat in chats:
+                            try:
+                                await asyncio.to_thread(telegram.call, "sendMessage", {"chat_id": chat, "text": "专用下载证书即将到期，请按 CERTIFICATE-LIFECYCLE.md 续期或轮换 CA。当前没有关闭 TLS 验证。"})
+                            except Exception:
+                                delivered = False
+                        if chats and delivered:
+                            atomic_json(db_root / "certificate-notice.json", {"sent_at": time.time()})
+                    warned_at = time.time()
+            except Exception:
+                ready = False
+            atomic_json(marker, {"ready": ready, "checked_at": time.time()})
+            await asyncio.sleep(10)
     telegram = Telegram(os.getenv("TELEGRAM_BOT_TOKEN", ""))
     me = await asyncio.to_thread(telegram.call, "getMe", {})
     if me["id"] != expected_id:
@@ -367,7 +443,7 @@ async def run():
         from .adapter_broker import Broker, start_control
         manager.adapter = Broker(store)
         start_control(manager.adapter, asyncio.get_running_loop())
-    await asyncio.gather(manager.poll(), manager.work())
+    await asyncio.gather(manager.poll(), manager.work(), manager.cleanup_media(), monitor())
 
 
 if __name__ == "__main__":

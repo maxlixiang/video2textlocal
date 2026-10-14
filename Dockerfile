@@ -9,6 +9,7 @@ FROM base AS manager
 COPY v2t /app/v2t
 COPY config /app/config
 COPY tests /app/tests
+COPY build_tools /app/build_tools
 CMD ["python", "-m", "v2t.manager"]
 
 FROM denoland/deno:bin-2.5.6@sha256:2f5f9d651af33c337767c423a340f76df35e35ff8ff4734210237b9c6fed94c7 AS deno
@@ -24,6 +25,7 @@ RUN python -m playwright install --with-deps chromium && chmod -R a+rX /opt/play
 COPY v2t /app/v2t
 COPY config /app/config
 COPY tests /app/tests
+COPY build_tools /app/build_tools
 USER app
 ENV SERVICE_ROLE=download
 CMD ["python", "-m", "v2t.service"]

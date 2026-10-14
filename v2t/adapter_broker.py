@@ -37,6 +37,17 @@ class Broker:
   return r
  async def dispatch(self,p):
   action=p['action'];worker=p.get('worker');self.refresh()
+  if action=='retention_check':
+   from .retention import seconds
+   ttl=seconds();tid=ident(p['task_id']);row=self.store.get(tid);job=self.get(tid)
+   authorized=bool(ttl and row and row['status']=='done' and row['updated']<=time.time()-ttl and job and job['worker']==worker and job['state']=='complete')
+   return {'authorized':authorized,'seconds':ttl}
+  if action=='retention':
+   from .retention import eligible,seconds
+   cursor=p.get('cursor','')
+   if cursor:ident(cursor)
+   rows=eligible(self.store,worker=worker,cursor=cursor)
+   return {'tasks':[{'task_id':r['id'],'completed_at':r['updated']} for r in rows],'seconds':seconds(),'next_cursor':rows[-1]['id'] if rows else ''}
   if action=='test_retry':
    if os.getenv('ADAPTER_TEST_MODE')!='1':raise Failure('invalid_input')
    row=self.store.get(ident(p['task_id']))

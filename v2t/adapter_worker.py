@@ -8,7 +8,7 @@ from .adapter_memory import Budget
 class Worker:
  def __init__(self,path):
   self.path=Path(path);self.config=read_json(self.path);self.client=Client(self.config);self.root=Path(self.config['spool']);self.root.mkdir(parents=True,exist_ok=True)
-  self.quota=self.config.get('quota_bytes',4*1024**3);self.minimum=self.config.get('min_free_bytes',2*1024**3)
+  self.quota=self.config.get('quota_bytes',4*1024**3);self.minimum=self.config.get('min_free_bytes',2*1024**3);self.retention_due=0;self.retention_cursor='';self.retention_queue=[];self.retention_seconds=0
  def execute(self,job):
   p={k:job[k] for k in ('task_id','generation')};stop=threading.Event();failure=[];beats=[]
   ownership={'server':False};last_ok=[time.monotonic()]
@@ -93,12 +93,32 @@ class Worker:
     except Failure:pass
    raise
   finally:stop.set();thread.join(timeout=16)
+ def cleanup_media(self):
+  from .retention import remove_one
+  if not self.retention_queue:
+   if time.time()<self.retention_due:return
+   try:
+    result=self.client.call('/v1/retention',{'cursor':self.retention_cursor})
+    self.retention_seconds=result['seconds'];self.retention_queue=[r['task_id'] for r in result['tasks']] if result['seconds'] else [];self.retention_cursor=result['next_cursor']
+    self.retention_due=time.time()+ (0 if self.retention_queue else 3600)
+   except Failure:return
+  if self.retention_queue:
+   tid=self.retention_queue[0]
+   try:
+    permit=self.client.call('/v1/retention_check',{'task_id':tid})
+    if not permit['authorized']:self.retention_queue.pop(0);return
+    r=remove_one(self.root,tid,time.time()-permit['seconds'])
+    if r['complete'] or r.get('deferred'):self.retention_queue.pop(0)
+    if r['removed']:print('windows_media_retention:'+tid+':'+str(r['bytes']),flush=True)
+   except Failure:return
+   except Exception:self.retention_queue.pop(0);print('windows_media_retention_retry_later',flush=True)
+
  def run(self,max_jobs=0):
   done=0;backoff=1;warned_certificate=None
   while not max_jobs or done<max_jobs:
    certificate=self.client.credentials()['cert'];remaining=cert_remaining(certificate)
-   if remaining<86400 and warned_certificate!=certificate:
-    print('adapter_certificate_expires_within_24_hours',flush=True);warned_certificate=certificate
+   if remaining<14*86400 and warned_certificate!=certificate:
+    print('adapter_certificate_renew_within_14_days',flush=True);warned_certificate=certificate
    if remaining<self.config.get('certificate_claim_margin_seconds',900):
     print('adapter_certificate_renewal_required',flush=True);return 1
    try:job=self.client.call('/v1/claim',{});backoff=1
@@ -107,7 +127,7 @@ class Worker:
      print(e.code,flush=True);return 1
     print('adapter_reconnecting:'+str(backoff),flush=True)
     time.sleep(backoff);backoff=min(backoff*2,self.config.get('reconnect_max_seconds',30));continue
-   if job.get('idle'):time.sleep(1);continue
+   if job.get('idle'):self.cleanup_media();time.sleep(1);continue
    try:
     result=self.execute(job);print(json.dumps({'task_id':job['task_id'],'state':result['state']},ensure_ascii=False),flush=True);done+=1
    except Failure as e:

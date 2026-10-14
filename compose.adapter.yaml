@@ -7,19 +7,23 @@ services:
       ADAPTER_QUEUE_SECONDS: ${ADAPTER_QUEUE_SECONDS:-300}
       ADAPTER_EXECUTION_SECONDS: ${ADAPTER_EXECUTION_SECONDS:-600}
     volumes:
-      - ${ADAPTER_CREDENTIALS_DIR:?dedicated_credentials_directory_required}:/adapter-credentials:ro
+      - adapter_manager_credentials:/adapter-credentials:ro
   download:
     environment:
       WINDOWS_ADAPTER_ENABLED: ${WINDOWS_ADAPTER_ENABLED:-0}
       ADAPTER_CONTROL_URL: http://manager:8082
       ADAPTER_INTERNAL_KEY_FILE: /adapter-credentials/internal.key
-      ADAPTER_SERVER_CERT: /adapter-credentials/tls-active/server.pem
-      ADAPTER_SERVER_KEY: /adapter-credentials/tls-active/server.key
-      ADAPTER_CA_FILE: /adapter-credentials/ca.pem
-      ADAPTER_WORKERS_FILE: /adapter-credentials/workers.json
+      ADAPTER_SERVER_CERT: /adapter-credentials/current/server.pem
+      ADAPTER_SERVER_KEY: /adapter-credentials/current/server.key
+      ADAPTER_CA_FILE: /adapter-credentials/current/ca.pem
+      ADAPTER_WORKERS_FILE: /adapter-credentials/current/workers.json
       ADAPTER_LINUX_QUOTA_BYTES: ${ADAPTER_LINUX_QUOTA_BYTES:-8589934592}
       ADAPTER_MIN_FREE_BYTES: ${ADAPTER_MIN_FREE_BYTES:-2147483648}
     volumes:
-      - ${ADAPTER_CREDENTIALS_DIR:?dedicated_credentials_directory_required}:/adapter-credentials:ro
+      - adapter_download_credentials:/adapter-credentials:ro
     ports:
       - "127.0.0.1:${ADAPTER_PORT:-18765}:8443"
+
+volumes:
+  adapter_manager_credentials:
+  adapter_download_credentials:

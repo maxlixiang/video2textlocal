@@ -1,3 +1,7 @@
+## 2026-10-14 Windows 联动更新
+
+已启用当前用户 Docker Desktop 联动任务，Windows worker 现由管理程序自动启动/停止，不再默认要求手动前台启动。操作及验证边界见 [WINDOWS-DOCKER-FOLLOWER.md](WINDOWS-DOCKER-FOLLOWER.md)。本文件此前的手动启动说明仅用于禁用联动后的维护，不能同时启动两个 worker。
+
 # Telegram 视频转文字机器人
 
 独立 Linux/Docker 项目，不修改 Video2Text1 或旧机器人部署。第一版使用云端 Telegram Bot API 和长轮询，仅允许独立测试机器人启动。实际验收状态见 [TEST-REPORT.md](TEST-REPORT.md)，不要把代码实现或镜像构建成功等同于三平台验收通过。
@@ -132,3 +136,10 @@ docker compose --env-file .env.example --profile tools run --name v2t-existing-m
 
 
 本轮集中修复及最终镜像操作见 [FIX-OPERATIONS.md](FIX-OPERATIONS.md)，逐项验证与真实交互验收见 [FIX-REPORT.md](FIX-REPORT.md)。真实语义准确性仍需使用者抽查。
+
+
+已启用完成任务媒体 72 小时保留，运行时每小时检查；保留文字稿和模型，失败待重试不删除。保存路径、范围与配置见 [MEDIA-RETENTION.md](MEDIA-RETENTION.md)。
+
+## 2026-10-13 重启与专用证书更新
+
+日常启动请优先遵循 [REBOOT-RECOVERY.md](REBOOT-RECOVERY.md)，替代先前直接 bind 整个凭据目录的命令。运行配置与各角色凭据使用 Docker 管理的独立持久卷；原数据卷保留。证书维护与 CA 轮换见 [CERTIFICATE-LIFECYCLE.md](CERTIFICATE-LIFECYCLE.md)。Windows worker 仍需手动前台启动，未注册服务或计划任务。

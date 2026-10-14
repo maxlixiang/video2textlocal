@@ -18,3 +18,5 @@ adapter-private/
 *.log
 *:Zone.Identifier
 verification/
+
+adapter-offline/

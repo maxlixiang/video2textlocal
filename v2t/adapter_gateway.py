@@ -67,7 +67,7 @@ class Gateway:
   finally:
    with self.lock:self.running.discard(str(d))
  def operation(self,action,p,data=None):
-  if action in ('claim','heartbeat','status','failure'):return control(action,p)
+  if action in ('claim','heartbeat','status','failure','retention','retention_check'):return control(action,p)
   if action in ('test_submit','test_retry'):
    if os.getenv('ADAPTER_TEST_MODE')!='1':raise Failure('invalid_input')
    return control(action,p)

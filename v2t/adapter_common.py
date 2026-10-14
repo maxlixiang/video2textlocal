@@ -19,27 +19,42 @@ def control(action,payload):
  if out.get('error'):raise Failure(out['error'])
  return out
 
-def usage(root):
- root=Path(root);root.mkdir(parents=True,exist_ok=True)
- total=0
- def scan_error(exc):
-  # Chromium removes temporary directories concurrently; only disappearance is benign.
-  if not isinstance(exc,FileNotFoundError):raise Failure('disk_full') from None
- for directory,dirs,files in os.walk(root,onerror=scan_error,followlinks=False):
-  dirs[:]=[n for n in dirs if not (Path(directory)/n).is_symlink()]
-  for name in files:
-   path=Path(directory)/name
-   try:
-    if not path.is_symlink():total+=path.stat().st_size
-   except FileNotFoundError:pass
-   except OSError:raise Failure('disk_full') from None
+def storage_error(root, exc, operation):
+ # Record fixed exception metadata only: no paths, URLs, filenames or file contents.
+ try:
+  data={'operation':operation,'exception_type':type(exc).__name__,'errno':getattr(exc,'errno',None),'winerror':getattr(exc,'winerror',None),'time':time.time()}
+  path=Path(root)/'.storage-check.json';tmp=path.with_suffix('.new')
+  tmp.write_text(json.dumps(data),encoding='utf-8');tmp.replace(path)
+ except Exception:pass
+ raise Failure('storage_unavailable') from None
 
- return total
+def usage(root):
+ root=Path(root)
+ try:root.mkdir(parents=True,exist_ok=True)
+ except OSError as exc:storage_error(root,exc,'create_spool')
+ # Chromium creates/removes files concurrently. Retry a complete scan briefly;
+ # never silently skip unreadable files or disable the total-size quota.
+ for attempt in range(3):
+  try:
+   total=0
+   def scan_error(exc):
+    if not isinstance(exc,FileNotFoundError):raise exc
+   for directory,dirs,files in os.walk(root,onerror=scan_error,followlinks=False):
+    dirs[:]=[n for n in dirs if not (Path(directory)/n).is_symlink()]
+    for name in files:
+     path=Path(directory)/name
+     try:
+      if not path.is_symlink():total+=path.stat().st_size
+     except FileNotFoundError:pass
+   return total
+  except OSError as exc:
+   if attempt==2:storage_error(root,exc,'scan_spool')
+   time.sleep(.1*(attempt+1))
 
 def space(root,reserve,quota,minimum,other_reserved=0):
  used=usage(root)
  try:free=shutil.disk_usage(root).free
- except OSError:raise Failure('disk_full') from None
+ except OSError as exc:storage_error(root,exc,'query_free_space')
  if used+reserve+other_reserved>quota:raise Failure('adapter_quota')
  if free-reserve-other_reserved<minimum:raise Failure('disk_full')
  return {'used_bytes':used,'free_bytes':free,'reserved_bytes':reserve+other_reserved}

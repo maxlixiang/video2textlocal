@@ -31,6 +31,7 @@ ERRORS = {
     "adapter_memory_limit": "Windows 下载进程超过内存预算。",
     "adapter_quota": "媒体暂存总额度不足。",
     "disk_full": "剩余磁盘空间低于要求。",
+    "storage_unavailable": "暂存文件或磁盘信息暂时不可读取，请稍后重试或检查目录权限。",
     "adapter_offset": "上传偏移或分块校验不一致。",
     "invalid_input": "未找到受支持的视频链接。",
     "queue_full": "队列已满，请稍后再试。",

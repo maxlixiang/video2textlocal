@@ -12,3 +12,5 @@ wheelhouse
 diagnostics
 .adapter*
 adapter-private
+
+adapter-offline

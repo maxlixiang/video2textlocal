@@ -12,6 +12,7 @@ RUN pip check
 ENV LD_LIBRARY_PATH=/opt/conda/lib/python3.11/site-packages/nvidia/cublas/lib:/opt/conda/lib/python3.11/site-packages/nvidia/cudnn/lib:/opt/conda/lib:/usr/local/cuda/lib64:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
 COPY v2t /app/v2t
 COPY config /app/config
+COPY build_tools /app/build_tools
 RUN useradd --uid 1000 --create-home app && install -d -o app -g app /results /media /models /database
 USER app
 ENV SERVICE_ROLE=gpu

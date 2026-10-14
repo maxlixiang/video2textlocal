@@ -1,3 +1,7 @@
+## 2026-10-14 Windows 联动更新
+
+已启用当前用户 Docker Desktop 联动任务，Windows worker 现由管理程序自动启动/停止，不再默认要求手动前台启动。操作及验证边界见 [WINDOWS-DOCKER-FOLLOWER.md](WINDOWS-DOCKER-FOLLOWER.md)。本文件此前的手动启动说明仅用于禁用联动后的维护，不能同时启动两个 worker。
+
 # 修复版操作与维护
 
 本轮独立项目为 `/home/codex/workspace/telegram-video2text`。原 Video2Text1、旧机器人和全局网络没有修改。日常仍是专用测试机器人；同一个 Token 只能有一个 manager 轮询进程。
@@ -106,3 +110,10 @@ $tmp = $c.credential_manifest + ".new"
 
 
 Windows 重启后曾实际出现“容器运行但 WSL 配置/证书挂载缺失，manager 反复重启”。仅打开 Docker Desktop 并不总能完整恢复，现象与保留数据卷的恢复命令见 [REBOOT-RECOVERY.md](REBOOT-RECOVERY.md)。当前 healthcheck 仅检查 HTTP 存活。
+
+
+后续媒体保留更新：当前 `compose.final.yaml` 使用 `retention` 镜像，已完成任务的媒体/音频保留 72 小时后逐文件清理；旧文档“没有自动清理”描述的是此前修复验收状态。当前策略与用户授权范围见 [MEDIA-RETENTION.md](MEDIA-RETENTION.md)。启动停止仍使用相同四个 Compose，不删除卷。
+
+## 2026-10-13 重启与专用证书更新
+
+日常启动请优先遵循 [REBOOT-RECOVERY.md](REBOOT-RECOVERY.md)，替代先前直接 bind 整个凭据目录的命令。运行配置与各角色凭据使用 Docker 管理的独立持久卷；原数据卷保留。证书维护与 CA 轮换见 [CERTIFICATE-LIFECYCLE.md](CERTIFICATE-LIFECYCLE.md)。Windows worker 仍需手动前台启动，未注册服务或计划任务。

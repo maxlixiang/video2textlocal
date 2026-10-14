@@ -1,12 +1,25 @@
 # Acceptance and daily test-bot stack: immutable image code; config is read-only.
 services:
   manager:
-    image: telegram-video2text-manager:fixes-final
+    image: telegram-video2text-manager:storage-fix
+    volumes:
+      - runtime_config:/app/config:ro
+    healthcheck:
+      test: [CMD, python, -m, v2t.readiness]
+      interval: 10s
+      timeout: 15s
+      retries: 5
   download:
-    image: telegram-video2text-download:fixes-final
+    image: telegram-video2text-download:storage-fix
   gpu:
-    image: telegram-video2text-gpu:fixes-final
+    image: telegram-video2text-gpu:storage-fix
+    volumes:
+      - runtime_config:/app/config:ro
 volumes:
   models:
     external: true
     name: telegram-video2text_models
+
+  runtime_config:
+    external: true
+    name: ${COMPOSE_PROJECT_NAME:-v2t-live-fixes}_runtime_config

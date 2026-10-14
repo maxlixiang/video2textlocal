@@ -87,9 +87,27 @@ class Handler(BaseHTTPRequestHandler):
                 from .core import asr_config
                 return self.reply({"configs":{e:asr_config(e) for e in ("funasr","whisper")}})
             except Failure as e:return self.reply({"error":e.code})
-        self.reply({"role": ROLE, "ready": True} if self.path == "/health" else {"error": "invalid_input"})
+        if self.path == "/health":
+            from .readiness import check
+            result = check(ROLE)
+            return self.reply(result, 200 if result["ready"] else 503)
+        self.reply({"error": "invalid_input"}, 404)
 
     def do_POST(self):
+        if self.path == "/maintenance/media" and ROLE == "download":
+            from .adapter_common import key
+            import hmac
+            try:
+                if not hmac.compare_digest(self.headers.get("X-Adapter-Key", ""), key()):raise Failure("adapter_auth")
+                size=int(self.headers.get("Content-Length","0"))
+                if not 0<size<=1024:raise Failure("invalid_input")
+                payload=json.loads(self.rfile.read(size))
+                from .retention import remove_one,seconds
+                ttl=seconds()
+                if not ttl:raise Failure("invalid_input")
+                return self.reply(remove_one(Path(os.getenv("MEDIA_ROOT","/media")),payload["task_id"],time.time()-ttl))
+            except Failure as e:return self.reply({"error":e.code})
+            except Exception:return self.reply({"error":"internal_error"})
         if self.path == "/adapter/cache":
             from .adapter_common import enabled, key
             import hmac
@@ -116,6 +134,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/run":
             return self.reply({"error": "invalid_input"}, 404)
         try:
+            from .readiness import check
+            readiness = check(ROLE)
+            if not readiness["ready"]:
+                raise Failure(readiness.get("error", "service_unavailable"))
             size = int(self.headers.get("Content-Length", "0"))
             if not 0 < size <= 16384:
                 raise Failure("invalid_input")

@@ -106,3 +106,7 @@ Windows worker 手动前台；关闭窗口、注销、重启后需手动启动�
 
 
 发布补充：`verification/fixes/` 所列证据是本机路径，没有整份上传到公开仓库。用户随后手动清理了已停止容器和构建缓存；脱敏报告及任务卷未由本轮上传操作删除。用户报告 Windows 重启后，发现配置/证书挂载缺失，重建容器后恢复 manager 与 Windows worker 连接；详见 REBOOT-RECOVERY.md，不将自动挂载恢复记为通过。
+
+## 后续重启与 CA 修复
+
+2026-10-13 的运行版本与凭据挂载已经更新，请同时阅读 [RECOVERY-FIX-REPORT.md](RECOVERY-FIX-REPORT.md)。旧镜像 ID、证书有效期和 bind 挂载描述作为历史记录保留，不代表当前部署。
