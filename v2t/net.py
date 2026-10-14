@@ -10,11 +10,20 @@ from urllib.parse import urlsplit
 from .core import Failure
 
 FAKE_IP_RANGE = ipaddress.ip_network("198.18.0.0/15")
-TRUSTED_DNS_DOMAINS = ("douyin.com", "iesdouyin.com", "douyinvod.com", "douyincdn.com", "byteimg.com", "bytecdn.cn",
-                       "pstatp.com", "snssdk.com", "bytedance.com", "ibytedtos.com", "bytegecko.com", "ttwstatic.com",
-                       "fxtwitter.com", "video.twimg.com", "isv-data.oss-cn-hangzhou.aliyuncs.com")
-TRUSTED_DNS_DOMAINS += ("douyinstatic.com", "bytescm.com", "bytegoofy.com", "bytetos.com", "yhgfb-cn-static.com")
-TRUSTED_DNS_DOMAINS += ("zijieapi.com", "applogcdn.com", "ibytedapm.com", "bytednsdoc.com", "byteeffecttos.com", "feelgood.cn", "bytetcc.com")
+def address_allowed(address, allow_fake=False):
+    """Single-user policy: public addresses or explicitly enabled fake-IP.
+
+    Fake-IP is a user-authorized exception, not proof of a public upstream target.
+    """
+    try:
+        ip = ipaddress.ip_address(address)
+        if ip.version == 6 and ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        if ip.is_multicast or ip.is_unspecified:
+            return False
+        return ip.is_global or bool(allow_fake and ip.version == 4 and ip in FAKE_IP_RANGE)
+    except ValueError:
+        return False
 
 
 def public_url(url):
@@ -22,11 +31,16 @@ def public_url(url):
     if p.scheme not in {"https", "http"} or not p.hostname or p.username or p.password or p.port not in (None, 80, 443):
         raise Failure("download_failed")
     try:
+        literal = ipaddress.ip_address(p.hostname)
+    except ValueError:
+        pass
+    else:
+        if not address_allowed(str(literal), os.getenv("ALLOW_FAKE_IP_DNS") == "1"):
+            raise Failure("download_failed")
+    try:
         answers = socket.getaddrinfo(p.hostname, p.port or (443 if p.scheme == "https" else 80), type=socket.SOCK_STREAM)
-        trusted_host = any(p.hostname == d or p.hostname.endswith("." + d) for d in TRUSTED_DNS_DOMAINS)
         def accepted(address):
-            ip = ipaddress.ip_address(address)
-            return ip.is_global or (os.getenv("ALLOW_FAKE_IP_DNS") == "1" and trusted_host and ip.version == 4 and ip in FAKE_IP_RANGE)
+            return address_allowed(address, os.getenv("ALLOW_FAKE_IP_DNS") == "1")
         if not answers or any(not accepted(a[4][0]) for a in answers):
             raise Failure("download_failed")
     except OSError:

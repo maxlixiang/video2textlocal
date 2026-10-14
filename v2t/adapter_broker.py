@@ -72,6 +72,8 @@ class Broker:
    return self.get(r['task_id'])
   if action in ('heartbeat','check','start','accept','status'):
    r=self.checked(p,validating=action in ('heartbeat','status','accept'))
+   if action=='heartbeat':
+    with self.db:self.db.execute('INSERT OR REPLACE INTO adapter_workers VALUES(?,?)',(worker,time.time()))
    if action=='heartbeat' and r['state'] in ('leased','uploading'):self.change(r['task_id'],lease_deadline=min(time.time()+self.lease_ttl,r['execution_deadline']))
    if action=='start':self.change(r['task_id'],state='uploading')
    if action=='accept' and r['state'] in ('leased','uploading'):self.change(r['task_id'],state='validating',validation_deadline=time.time()+self.validate_ttl)

@@ -249,6 +249,8 @@ class Store:
                 PRIMARY KEY(task_id,kind,content_hash));
         """)
 
+        self.db.execute("CREATE TABLE IF NOT EXISTS choice_notices(task_id TEXT PRIMARY KEY,state TEXT DEFAULT 'pending',attempts INTEGER DEFAULT 0,next_attempt REAL DEFAULT 0)")
+        self.db.commit()
         columns = {r[1] for r in self.db.execute("PRAGMA table_info(tasks)")}
         if "queued_at" not in columns:
             self.db.execute("ALTER TABLE tasks ADD COLUMN queued_at REAL")
@@ -294,9 +296,19 @@ class Store:
         with self.db:
             self.db.execute("INSERT OR IGNORE INTO deliveries VALUES(?,?,?,?)", (tid, kind, content_hash, message_id))
 
+    def expire_choice(self, tid, now=None):
+        now = time.time() if now is None else now
+        with self.db:
+            changed = self.db.execute("UPDATE tasks SET status='expired',stage='expired',error=NULL,updated=? WHERE id=? AND status='choice' AND created<=?", (now, tid, now - 120)).rowcount
+            if changed:
+                self.db.execute("INSERT OR IGNORE INTO choice_notices(task_id) VALUES(?)", (tid,))
+                self.db.execute("INSERT INTO events(task_id,stage,status,created) VALUES(?,'choice','expired',?)", (tid, now))
+        return bool(changed)
+
     def enqueue(self, tid, owner, polish, limit=20, mode=None):
         from .storage import protect
         protect(self.path.parent,kind="database")
+        self.expire_choice(tid)
         with self.db:
             row = self.get(tid)
             if not row or row["owner"] != owner or row["status"] not in {"choice", "failed"}:

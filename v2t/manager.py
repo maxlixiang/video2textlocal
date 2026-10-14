@@ -13,7 +13,7 @@ from .polish import polish, cached_polished
 from .telegram import Telegram
 from .presentation import filename, short_title, error_text
 
-LABELS = {"queued": "排队", "download": "下载", "recognize": "识别", "polish": "整理",
+LABELS = {"choice": "等待选择", "expired": "选择已过期", "queued": "排队", "download": "下载", "recognize": "识别", "polish": "DeepSeek 整理",
           "sending_video": "发送视频", "sending_raw": "发送原稿", "sending_polished": "发送整理稿", "done": "完成", "failed": "失败"}
 
 
@@ -78,6 +78,8 @@ class Manager:
         name = short_title(source.get("title"), f"{row['platform']}_{row['media_id'] or tid[:8]}")
         text = f"{name}\n{LABELS.get(stage, stage)}"
         if row["mode"] != "video": text += f" · 本地识别 {row['engine']}"
+        if stage == "polish":
+            text += "\n原稿已发送，正在使用 DeepSeek 整理稿件，请稍候。"
         if error:
             text += "\n" + error_text(error, ERRORS)
         values = {"chat_id": row["chat"], "text": text}
@@ -158,6 +160,13 @@ class Manager:
                 if result is None:
                     await self.notify(tid, "polish")
                     self.store.event(tid, "polish", "running")
+                    notice_hash = fingerprint({"original": original_hash, "notice": "polish_wait_v1"})
+                    if not self.store.delivered(tid, "polish_notice", notice_hash):
+                        try:
+                            notice = await asyncio.to_thread(self.telegram.call, "sendMessage", {"chat_id": row["chat"], "text": f"{short_title(source.get('title'), fallback)}\n原稿已发送，正在使用 DeepSeek 整理稿件，请稍候。"})
+                            self.store.delivery(tid, "polish_notice", notice_hash, notice["message_id"])
+                        except Failure:
+                            pass  # A waiting notice must never invalidate the original or block polishing.
                     result = await asyncio.to_thread(self.polisher, directory, raw)
                     self.store.event(tid, "polish", "success")
                 cleaned = directory / filename(source.get("title"), "deepseek转写", fallback=fallback)
@@ -209,6 +218,57 @@ class Manager:
         self.store.update(tid, status="done")
         await self.notify(tid, "done")
 
+    async def check_services(self):
+        """Internal readiness only: no media download, GPU inference or paid API call."""
+        async def probe(url):
+            try:
+                value = await asyncio.to_thread(self.service, url + "/health", timeout=4)
+                return value if isinstance(value, dict) else {"ready": False}
+            except Exception:
+                return {"ready": False}
+        download, gpu = await asyncio.gather(probe(os.getenv("DOWNLOAD_URL", "http://download:8080")), probe(os.getenv("GPU_URL", "http://gpu:8080")))
+        config_matches = False
+        if gpu.get("ready"):
+            try:
+                remote = await asyncio.to_thread(self.service, os.getenv("GPU_URL", "http://gpu:8080") + "/configuration", timeout=4)
+                config_matches = remote.get("configs") == {e:asr_config(e) for e in ("funasr","whisper")}
+            except Exception: pass
+        from .adapter_common import enabled
+        adapter_enabled = enabled()
+        worker_online = False
+        age = None
+        if adapter_enabled:
+            try:
+                row = self.store.db.execute("SELECT MAX(seen) FROM adapter_workers").fetchone()
+                if row and row[0] is not None:
+                    age = time.time() - row[0]
+                    window = self.adapter.lease_ttl if self.adapter else int(os.getenv("ADAPTER_LEASE_SECONDS", "45"))
+                    worker_online = -5 <= age <= window
+            except Exception: pass
+        download_ok = bool(download.get("ready"))
+        gpu_ok = bool(gpu.get("ready") and config_matches)
+        douyin_ok = download_ok and adapter_enabled and worker_online
+        lines = ["健康检查（与任务状态分开）：", "Telegram：命令已接收", "下载服务：" + ("就绪" if download_ok else "异常或不可连接"),
+                 "YouTube／X 下载：" + ("服务就绪，平台网络尚未验证" if download_ok else "暂不可用"),
+                 "本地 GPU 识别：" + ("运行前提及配置一致，未执行推理" if gpu_ok else "异常、不可连接或配置不一致")]
+        if not adapter_enabled:
+            lines += ["抖音下载：Windows 适配器未启用", "适配器证书：未检查（适配器关闭）"]
+        else:
+            connection = "在线" if worker_online else "离线或尚未连接"
+            if age is not None: connection += f"（最近连接／心跳距今 {max(0,int(age))} 秒）"
+            lines += ["Windows 抖音下载进程：" + connection, "抖音下载：" + ("服务就绪，具体作品尚未验证" if douyin_ok else "暂不可用"),
+                      "适配器证书：" + ("下载服务已检查，当前有效" if download_ok else "未确认，请检查下载服务及证书")]
+            if download.get("warnings"): lines.append("证书维护：已进入维护提醒期，请查看证书状态工具")
+        if os.getenv("DEEPSEEK_API_KEY", "").strip():
+            try:
+                from .polish import config
+                config()
+                lines.append("DeepSeek：已配置，密钥有效性和网络未验证（未调用 API）")
+            except Exception: lines.append("DeepSeek：本地配置异常，原稿模式仍可用")
+        else: lines.append("DeepSeek：未配置密钥，原稿模式仍可用")
+        lines += ["", "查看等待、排队和处理进度请用 /status。检查就绪不保证视频可访问或 GPU 推理一定成功。"]
+        return "\n".join(lines)
+
     async def handle(self, update):
         callback = update.get("callback_query")
         if callback:
@@ -219,6 +279,11 @@ class Manager:
                 await self.answer_callback(callback["id"], "无权限或任务不属于你。", True)
                 return
             action, tid = parts
+            self.store.expire_choice(tid)
+            row = self.store.get(tid)
+            if row["status"] == "expired":
+                await self.answer_callback(callback["id"], "本次选择已超过两分钟，请重新发送链接。", True)
+                return
             if action == "engine" and row["status"] == "choice":
                 self.store.update(tid, engine="whisper" if row["engine"] == "funasr" else "funasr")
                 row = self.store.get(tid)
@@ -249,17 +314,33 @@ class Manager:
             return
         owner, chat = message["from"]["id"], message["chat"]["id"]
         text = message.get("text", "")
-        if text.startswith(("/start", "/help")):
-            reply = "发送 YouTube、X/Twitter 或抖音视频链接/分享文本。每条消息处理第一个有效链接。选择视频下载、原稿或原稿＋DeepSeek 整理稿，可在提交前切换引擎。/status 查看自己的任务。"
+        command = text.split()[0].split("@")[0] if text.strip() else ""
+        if command in {"/start", "/help"}:
+            reply = "发送 YouTube、X/Twitter 或抖音视频链接/分享文本。每条消息处理第一个有效链接。选择视频下载、原稿或原稿＋DeepSeek 整理稿，可在两分钟内切换引擎并提交；超时请重新发送链接。/status 查看自己的任务；/check 检查服务可用性。"
             await asyncio.to_thread(self.telegram.call, "sendMessage", {"chat_id": chat, "text": reply})
             return
-        if text.startswith("/status"):
-            rows = self.store.db.execute("SELECT id,status,stage,error FROM tasks WHERE owner=? AND chat=? ORDER BY created DESC LIMIT 10", (owner, chat)).fetchall()
-            reply = "\n".join(f"{r['id']} {LABELS.get(r['stage'], r['stage'])}" for r in rows) or "暂无任务"
-            choices = self.store.db.execute("SELECT * FROM tasks WHERE owner=? AND chat=? AND status='choice' ORDER BY created DESC LIMIT 1", (owner,chat)).fetchone()
-            values={"chat_id":chat,"text":reply}
-            if choices:values["reply_markup"]=self.choices(dict(choices))
-            await asyncio.to_thread(self.telegram.call,"sendMessage",values)
+        if command == "/check":
+            reply = await self.check_services()
+            await asyncio.to_thread(self.telegram.call, "sendMessage", {"chat_id":chat, "text":reply})
+            return
+        if command == "/status":
+            for pending in self.store.db.execute("SELECT id FROM tasks WHERE owner=? AND chat=? AND status='choice'", (owner,chat)).fetchall():
+                self.store.expire_choice(pending["id"])
+            active = self.store.db.execute("SELECT * FROM tasks WHERE owner=? AND chat=? AND status IN ('choice','queued','running') ORDER BY created LIMIT 20", (owner,chat)).fetchall()
+            recent = self.store.db.execute("SELECT * FROM tasks WHERE owner=? AND chat=? AND status IN ('done','failed','expired') ORDER BY updated DESC LIMIT 5", (owner,chat)).fetchall()
+            lines = ["当前状态：有待处理任务，仍可发送新链接。" if active else "当前状态：待命（Standby），可以发送视频链接。"]
+            def describe(r):
+                label = LABELS.get(r["stage"], r["stage"])
+                if r["status"] == "choice":
+                    remaining = max(0, int(r["created"] + 120 - time.time()))
+                    label += f"（剩余 {remaining} 秒）"
+                line = f"{r['platform']}_{r['id'][:8]}：{label}"
+                if r["mode"] != "video": line += f" · {r['engine']}"
+                if r["status"] == "failed": line += "\n" + error_text(r["error"], ERRORS)
+                return line
+            if active: lines += ["", "待处理任务："] + [describe(r) for r in active]
+            if recent: lines += ["", "最近记录："] + [describe(r) for r in recent]
+            await asyncio.to_thread(self.telegram.call,"sendMessage",{"chat_id":chat,"text":"\n".join(lines)})
             return
         try:
             target = parse_target(text)
@@ -270,8 +351,36 @@ class Manager:
         if row["status_message"] or row["status"] != "choice":
             return
         result = await asyncio.to_thread(self.telegram.call, "sendMessage", {"chat_id": chat,
-                 "text": f"任务 {row['id']} · {target.platform}\n选择输出：下载视频不识别；原稿仅本地识别；DeepSeek 只接收转写文本。", "reply_markup": self.choices(row)})
+                 "text": f"任务 {row['id']} · {target.platform}\n请在两分钟内选择输出（切换引擎不延长期限）：下载视频不识别；原稿仅本地识别；DeepSeek 只接收转写文本。", "reply_markup": self.choices(row)})
         self.store.update(row["id"], status_message=result["message_id"])
+
+    async def expire_choices_once(self):
+        due = self.store.db.execute("SELECT id FROM tasks WHERE status='choice' AND created<=? ORDER BY created LIMIT 100", (time.time()-120,)).fetchall()
+        for row in due: self.store.expire_choice(row["id"])
+        notices = self.store.db.execute("SELECT task_id,attempts FROM choice_notices WHERE state='pending' AND next_attempt<=? LIMIT 20", (time.time(),)).fetchall()
+        for notice in notices:
+            row = self.store.get(notice["task_id"])
+            if not authorized(row, row["owner"] if row else None, self.allowed):
+                with self.store.db: self.store.db.execute("UPDATE choice_notices SET state='failed' WHERE task_id=?", (notice["task_id"],))
+                continue
+            if row["status_message"]:
+                try:
+                    await asyncio.to_thread(self.telegram.call, "editMessageReplyMarkup", {"chat_id":row["chat"], "message_id":row["status_message"], "reply_markup":{"inline_keyboard":[]}}, timeout=10)
+                except Failure: pass
+            attempts = notice["attempts"] + 1
+            with self.store.db: self.store.db.execute("UPDATE choice_notices SET attempts=? WHERE task_id=?", (attempts,row["id"]))
+            try:
+                await asyncio.to_thread(self.telegram.call, "sendMessage", {"chat_id":row["chat"], "text":f"{row['platform']}_{row['id'][:8]}\n两分钟内未收到操作选择，本次请求已取消。请重新发送链接。"}, timeout=10)
+                state = "done"
+            except Failure as exc:
+                state = "failed" if attempts >= 3 or exc.code in {"send_forbidden","send_auth","send_invalid_request"} else "pending"
+            with self.store.db: self.store.db.execute("UPDATE choice_notices SET state=?,next_attempt=? WHERE task_id=?", (state,time.time()+15*attempts,row["id"]))
+
+    async def choice_timeouts(self):
+        while True:
+            try: await self.expire_choices_once()
+            except Exception: print("choice_timeout_retry_later",flush=True)
+            await asyncio.sleep(2)
 
     async def cleanup_media(self):
         from .retention import eligible,seconds
@@ -320,7 +429,7 @@ class Manager:
             out["callback_query"]={"id":cb["id"],"from":{"id":cb["from"]["id"]},"data":cb.get("data","") if __import__("re").fullmatch(r"(?:video|raw|both|retry|engine):[a-f0-9]{32}",str(cb.get("data",""))) else ""}
         elif update.get("message"):
             m=update["message"];text=m.get("text","")
-            if text.startswith(("/start","/help","/status")):text=text.split()[0]
+            if text.startswith(("/start","/help","/status","/check")):text=text.split()[0]
             else:
                 try:text=parse_target(text).url
                 except (Failure,ValueError):text="invalid_video_address"
@@ -443,7 +552,7 @@ async def run():
         from .adapter_broker import Broker, start_control
         manager.adapter = Broker(store)
         start_control(manager.adapter, asyncio.get_running_loop())
-    await asyncio.gather(manager.poll(), manager.work(), manager.cleanup_media(), monitor())
+    await asyncio.gather(manager.poll(), manager.work(), manager.cleanup_media(), manager.choice_timeouts(), monitor())
 
 
 if __name__ == "__main__":

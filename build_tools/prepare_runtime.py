@@ -41,7 +41,7 @@ def sync(volume, files, image, generation=None):
 
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--project',default='v2t-live-fixes');p.add_argument('--runtime-directory',default='.adapter-runtime');p.add_argument('--image',default='telegram-video2text-manager:storage-fix');p.add_argument('--config-directory',default='config')
+    p=argparse.ArgumentParser();p.add_argument('--project',default='v2t-live-fixes');p.add_argument('--runtime-directory',default='.adapter-runtime');p.add_argument('--image',default='telegram-video2text-manager:health');p.add_argument('--config-directory',default='config')
     a=p.parse_args();root=Path(a.runtime_directory);config=Path(a.config_directory)
     os.umask(0o077)
     try:

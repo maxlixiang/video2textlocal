@@ -5,14 +5,11 @@ from .core import Failure,atomic_json,file_hash,read_json
 from .douyin_data import _find_video,_video_urls,extract_aweme_id
 
 def media_url(url,config):
- import ipaddress,socket
+ import socket
  from urllib.parse import urlsplit
- p=urlsplit(url);host=(p.hostname or '').lower()
- if p.scheme not in ('http','https') or p.username or p.password or p.port not in (None,80,443) or not any(host==d or host.endswith('.'+d) for d in ('douyinvod.com','douyin.com','iesdouyin.com','snssdk.com','bytecdn.cn','zjcdn.com')):raise Failure('download_failed')
- for addr in socket.getaddrinfo(host,443,type=socket.SOCK_STREAM):
-  ip=ipaddress.ip_address(addr[4][0]);fake=ip.version==4 and ip in ipaddress.ip_network('198.18.0.0/15')
-  if not ip.is_global and not(fake and config.get('allow_fake_ip_dns')):raise Failure('download_failed')
- return url
+ from .browser_policy import browser_url
+ if urlsplit(url).scheme not in ('http','https'):raise Failure('download_failed')
+ return browser_url(url,config.get('allow_fake_ip_dns',False),resolver=socket.getaddrinfo)
 
 def visible_verification(page):
  # Matches B's tolerant captcha reader: a navigation can destroy the old execution context.
@@ -73,7 +70,9 @@ def download(job,directory,config):
    for redirect in range(4):
     from urllib.parse import urlsplit
     atomic_json(directory/'download-stage.json',{'stage':'media_request','scheme':urlsplit(url).scheme,'host':urlsplit(url).hostname,'redirect':redirect})
-    response=context.request.get(media_url(url,config),headers={'User-Agent':DEFAULT_USER_AGENT,'Referer':page.url},timeout=45000,max_redirects=0)
+    checked_url=media_url(url,config)
+    response=context.request.get(checked_url,headers={'User-Agent':DEFAULT_USER_AGENT,'Referer':page.url},timeout=45000,max_redirects=0)
+    atomic_json(directory/'download-stage.json',{'stage':'media_response','scheme':urlsplit(url).scheme,'host':urlsplit(url).hostname,'redirect':redirect,'http_status':response.status})
     if response.status not in (301,302,303,307,308):break
     from urllib.parse import urljoin
     url=urljoin(url,response.headers.get('location',''))
@@ -122,7 +121,10 @@ def main():
   meta['windows']['decode']=validate(path,config,job.get('mode')=='video');path.replace(d/'media.complete');meta.update(bytes=(d/'media.complete').stat().st_size,sha256=file_hash(d/'media.complete'))
   atomic_json(d/'download.json',meta);return 0
  except MemoryError:atomic_json(d/'download.json',{'error':'adapter_memory_limit'});return 1
- except Failure as e:atomic_json(d/'download.json',{'error':e.code,'exception_type':'Failure'});return 1
+ except Failure as e:
+  import traceback
+  frames=[{'file':Path(f.filename).name,'line':f.lineno,'function':f.name} for f in traceback.extract_tb(e.__traceback__)][-5:]
+  atomic_json(d/'download.json',{'error':e.code,'exception_type':'Failure','frames':frames});return 1
  except Exception as e:
   import traceback
   frames=[{'file':Path(f.filename).name,'line':f.lineno,'function':f.name} for f in traceback.extract_tb(e.__traceback__)][-5:]

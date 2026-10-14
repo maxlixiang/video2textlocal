@@ -35,9 +35,10 @@ class Fixes(Fixture):
   asyncio.run(m.ingest(u));self.assertEqual(self.store.db.execute('select count(*) from tasks').fetchone()[0],1);self.assertEqual(self.store.get_offset(),13)
  def test_browser_private_and_redirect_destinations_blocked(self):
   def resolve(host,port,**kwargs):return [(2,1,6,'',( '127.0.0.1' if host=='www.douyin.com' else '1.1.1.1',port))]
-  for url in ['http://127.0.0.1/','http://192.168.1.2/','https://www.douyin.com/','https://evil.example/']:
+  for url in ['http://127.0.0.1/','http://192.168.1.2/','https://www.douyin.com/']:
    with self.assertRaises(Failure):browser_url(url,True,resolve)
   self.assertEqual(browser_url('https://v.douyin.com/link',False,resolve),'https://v.douyin.com/link')
+  self.assertEqual(browser_url('https://new-cdn.example/link',False,resolve),'https://new-cdn.example/link')
  def test_worker_waits_on_transport_not_on_auth(self):
   from v2t.adapter_worker import Worker
   w=object.__new__(Worker);w.config={'cert':'fixture','reconnect_max_seconds':4};w.client=type('Client',(),{})();w.client.credentials=lambda:{'cert':'fixture'}

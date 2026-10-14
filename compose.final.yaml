@@ -1,7 +1,7 @@
 # Acceptance and daily test-bot stack: immutable image code; config is read-only.
 services:
   manager:
-    image: telegram-video2text-manager:storage-fix
+    image: telegram-video2text-manager:health
     volumes:
       - runtime_config:/app/config:ro
     healthcheck:
@@ -10,9 +10,9 @@ services:
       timeout: 15s
       retries: 5
   download:
-    image: telegram-video2text-download:storage-fix
+    image: telegram-video2text-download:health
   gpu:
-    image: telegram-video2text-gpu:storage-fix
+    image: telegram-video2text-gpu:health
     volumes:
       - runtime_config:/app/config:ro
 volumes:
